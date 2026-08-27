@@ -2,102 +2,234 @@
 
 **Created by SV1EEX**
 
-A lightweight Python GUI for generating slow CW / QRSS beacon transmissions with Analog Devices PlutoSDR and compatible Zynq7000 + AD936x SDR hardware.
+An embedded SDR QRSS transmitter project for Analog Devices PlutoSDR and compatible Zynq7000 + AD936x platforms.
 
-The program uses the FPGA DDS exposed by the Analog Devices IIO stack, so the host computer does not need to continuously stream IQ samples during a transmission. Python is used mainly for beacon timing, Morse generation, parameter control and the graphical interface.
+The project contains two implementations of the same beacon concept:
+
+1. A Python/Tkinter desktop controller using `pyadi-iio`.
+2. A fully standalone shell implementation that runs directly on the Zynq ARM Linux system and controls the FPGA DDS through IIO sysfs.
+
+The standalone mode does not require a host computer once installed on the SDR.
+
+## Why this approach
+
+The beacon does not continuously stream IQ samples from a PC. Carrier generation is performed by the FPGA DDS exposed by the Analog Devices IIO architecture. The host or embedded ARM processor only performs configuration and slow Morse timing.
+
+This keeps the transmit path simple and makes autonomous operation practical.
 
 ## Features
 
-* Tkinter graphical interface
 * PlutoSDR and compatible Zynq7000 + AD936x support
-* IIO connection over Ethernet or another libiio URI
-* FPGA DDS based CW generation
-* QRSS1, QRSS3, QRSS6 and QRSS10 modes
+* FPGA DDS based RF carrier generation
+* QRSS CW transmission
 * Configurable RF frequency
 * Configurable DDS offset
-* Configurable TX attenuation from the GUI
+* Configurable AD936x TX attenuation
 * Configurable DDS amplitude
-* User defined beacon message
-* Repeat interval control
-* Two second CW carrier test
-* Immediate software stop request using an interruptible worker thread
-* DDS shutdown when a transmission finishes
-* Hardware emergency stop reminder for boards fitted with an RST button
+* User defined Morse identification
+* Configurable repeat interval
+* QRSS1, QRSS3, QRSS6 and QRSS10 in the Python GUI
+* Two second carrier test in the Python GUI
+* Controlled DDS shutdown
+* Standalone embedded Linux operation
+* No PC required in standalone mode
+* Persistent installation through `/mnt/jffs2` on compatible Pluto firmware
 
 ## Tested hardware
 
-Development was performed with a Pluto compatible board reporting itself through libiio as:
+Development and RF testing were performed with a Pluto compatible board reporting through libiio as:
 
 ```text
 Analog Devices PlutoSDR Rev.B (Z7010-AD9364)
 ```
 
-The detected FPGA design exposes the standard Analog Devices transmit DDS device:
+The board exposes:
 
 ```text
-cf-ad9361-dds-core-lpc
+iio:device0: ad9361-phy
+iio:device2: cf-ad9361-dds-core-lpc
 ```
 
-The same approach should work with genuine PlutoSDR units and other compatible AD936x based designs that expose the same DDS interface. Compatibility cannot be guaranteed for custom FPGA images that omit or modify the DDS core.
+The transmit DDS channels used by the standalone implementation are:
+
+```text
+TX1_I_F1
+TX1_Q_F1
+```
+
+The same architecture should also work with genuine PlutoSDR units and other compatible AD936x designs that expose the standard Analog Devices DDS interfaces. Custom FPGA images may differ.
+
+## Repository structure
+
+```text
+qrssbeaconplutosdr/
+    qrss_beacon.py      Python/Tkinter desktop GUI
+    qrss_beacon.sh      Standalone embedded Linux beacon
+    requirements.txt    Python dependencies
+    README.md
+```
+
+# Desktop Python version
 
 ## Requirements
 
-The project requires Python and the Analog Devices IIO software stack.
+Install the Python dependencies with:
 
-Python packages:
+```bash
+python -m pip install -r requirements.txt
+```
+
+The project currently uses:
 
 ```text
 pyadi-iio
 pylibiio
 ```
 
-Install them with:
+On Windows the native Analog Devices libiio runtime and drivers must also be installed.
 
-```bash
-python -m pip install -r requirements.txt
-```
-
-On Windows, the native Analog Devices libiio runtime and drivers must also be installed if they are not already present.
-
-A quick installation check is:
+Check the installation with:
 
 ```bash
 python -c "import adi; import iio; print('ADI:', adi.__version__); print('IIO:', iio.version)"
 ```
 
-You can verify that the SDR is visible with:
+Check that the SDR is visible:
 
 ```bash
 iio_info -S
 ```
 
-For a typical Pluto network connection:
+For a network connected Pluto compatible device:
 
 ```bash
 iio_info -u ip:192.168.2.1
 ```
 
-## Running the program
-
-Clone or download the repository and run:
+## Run the GUI
 
 ```bash
 python qrss_beacon.py
 ```
 
-The default IIO URI is:
+The default URI is:
 
 ```text
 ip:192.168.2.1
 ```
 
-Change this in the GUI if your SDR uses a different address or libiio URI.
+The GUI provides RF frequency, DDS offset, TX gain, DDS amplitude, message, QRSS speed, repeat timing, a two second CW test and explicit TX stop control.
 
-## Frequency generation
+# Standalone embedded version
 
-The application deliberately places the FPGA DDS tone away from zero Hz rather than generating the wanted carrier directly at DC.
+The standalone version is `qrss_beacon.sh`.
 
-For example:
+It runs directly on the embedded Linux system in the Zynq and writes to the AD936x PHY and FPGA DDS through sysfs. Once installed, the board can operate as a self contained QRSS transmitter using only power and an antenna or suitable RF load.
+
+## Verify the IIO devices
+
+SSH into the SDR and inspect the available devices:
+
+```bash
+for x in /sys/bus/iio/devices/iio:device*
+do
+    if [ -f "$x/name" ]; then
+        echo "$x : $(cat "$x/name")"
+    fi
+done
+```
+
+On the tested board this returns:
+
+```text
+/sys/bus/iio/devices/iio:device0 : ad9361-phy
+/sys/bus/iio/devices/iio:device1 : xadc
+/sys/bus/iio/devices/iio:device2 : cf-ad9361-dds-core-lpc
+/sys/bus/iio/devices/iio:device3 : cf-ad9361-lpc
+```
+
+## Install the standalone beacon
+
+From Windows PowerShell, copy the script to the persistent JFFS2 area:
+
+```powershell
+scp -O .\qrss_beacon.sh root@192.168.2.1:/mnt/jffs2/qrss_beacon.sh
+```
+
+The capital `-O` is important with current Windows OpenSSH because many Pluto firmware images provide legacy SCP but do not include an SFTP server.
+
+Then connect to the board:
+
+```powershell
+ssh root@192.168.2.1
+```
+
+Make the script executable:
+
+```bash
+chmod +x /mnt/jffs2/qrss_beacon.sh
+```
+
+Run it:
+
+```bash
+/mnt/jffs2/qrss_beacon.sh
+```
+
+A normal startup looks similar to:
+
+```text
+===============================================
+ Zynq7010 / PlutoSDR QRSS Beacon
+ Created by SV1EEX
+===============================================
+
+Initialising transmitter...
+
+Callsign:       SV1EEX
+RF frequency:   144400000 Hz
+TX LO:          144300000 Hz
+DDS offset:     100000 Hz
+TX gain:        0.000000 dB
+DDS level:      1.000000
+QRSS dot:       3 seconds
+Repeat gap:     30 seconds
+
+Beacon running
+Press Ctrl C to stop
+```
+
+Stop the standalone beacon with:
+
+```text
+Ctrl+C
+```
+
+The cleanup handler sets all DDS scales to zero before the script exits.
+
+If software control is lost and the board provides a physical `RST` button, pressing `RST` reboots the SDR and terminates the current transmit state.
+
+## Standalone configuration
+
+The main settings are near the top of `qrss_beacon.sh`:
+
+```bash
+CALLSIGN="SV1EEX"
+RF_FREQ=144400000
+DDS_OFFSET=100000
+TX_GAIN="0.000000"
+DDS_LEVEL="1.000000"
+DOT=3
+REPEAT_GAP=30
+```
+
+Change these before copying the file to the SDR or edit the persistent copy directly over SSH.
+
+# Frequency generation
+
+The wanted RF carrier is generated as the sum of the AD936x TX local oscillator and an FPGA DDS offset.
+
+Example:
 
 ```text
 Wanted RF frequency     144.400000 MHz
@@ -107,23 +239,11 @@ TX LO                   144.300000 MHz
 TX LO + DDS offset = wanted RF frequency
 ```
 
-This helps separate the wanted signal from LO leakage and DC related artifacts that may appear around the SDR local oscillator frequency.
+Keeping the DDS tone away from zero Hz helps separate the wanted signal from LO leakage and DC related artifacts around the SDR local oscillator.
 
-The default sample rate is:
+The tested FPGA image supports a 3.84 MHz DDS sample rate used by the Python implementation.
 
-```text
-3.84 MHz
-```
-
-The default DDS offset is:
-
-```text
-100 kHz
-```
-
-## QRSS timing
-
-The selected mode determines the Morse dot duration.
+# QRSS timing
 
 | Mode | Dot | Dash |
 | --- | ---: | ---: |
@@ -132,64 +252,39 @@ The selected mode determines the Morse dot duration.
 | QRSS6 | 6 s | 18 s |
 | QRSS10 | 10 s | 30 s |
 
-Standard Morse spacing is used inside the application. The long symbol durations make QRSS suitable for narrow bandwidth reception and waterfall observation.
+The standalone shell version uses the `DOT` variable directly, so other slow CW timing values can also be selected.
 
-## TX level controls
+# TX level
 
-The GUI exposes two different level controls.
-
-`TX gain dB` controls the AD936x transmit attenuation setting. On the development hardware the available range is approximately:
+`TX_GAIN` controls the AD936x transmit attenuation. On the development board the available range is approximately:
 
 ```text
 -89.75 dB to 0 dB
 ```
 
-`DDS amplitude` controls the FPGA DDS scale. A value of `1.0` is full scale at the DDS level.
+`DDS_LEVEL` controls the FPGA DDS scale, with `1.0` representing full scale at the DDS level.
 
-These controls do not directly specify RF power in watts or dBm. Actual output power depends on the SDR hardware, frequency, calibration, filtering and any external RF stages.
+These values do not directly specify output power in watts or dBm. Actual RF output depends on hardware, frequency, calibration, filtering and any external RF stages.
 
-## Stopping transmission
+# Verification
 
-`STOP TX` sets an interrupt event used by the transmission worker. Symbol timing and repeat delays use interruptible waits so the worker can leave the transmit sequence promptly and disable the DDS.
+An independent receiver and narrow waterfall are the easiest way to verify correct operation.
 
-When the software stop sequence completes, the status returns to:
+For QRSS, the transmitted carrier should appear and disappear according to the slow Morse timing. Receiver gain should be kept low enough to avoid overload when testing nearby.
 
-```text
-CONNECTED / TX OFF
-```
+# Safety and operating responsibility
 
-If software control is lost and the hardware provides a physical `RST` button, pressing `RST` reboots the SDR and provides a direct way to terminate the active FPGA DDS state. This is intended only as a recovery measure rather than normal operation.
+This software controls an RF transmitter. The operator is responsible for selecting frequencies, power levels, identification methods and operating conditions that comply with the applicable amateur radio licence, local regulations and band plan.
 
-## Checking the transmitted signal
+Example frequencies in the source are configuration examples only.
 
-A second SDR and waterfall display are the easiest way to verify operation.
+# Project direction
 
-For a first test, use the `2 SECOND CW TEST` button and monitor the selected RF frequency with an independent receiver. Avoid overloading the receiving SDR. A nearby transmitter can produce receiver overload, images and apparent spurious signals that are not representative of the transmitter output.
+The current project demonstrates both host controlled and autonomous embedded SDR transmission using the stock Analog Devices FPGA DDS.
 
-For QRSS observation, a narrow waterfall display is preferable because the signal changes very slowly.
+Possible future work includes automatic startup, watchdog recovery, persistent runtime configuration, GPSDO or external reference support, frequency drift measurement, FSKCW, telemetry, browser based control and custom FPGA signal processing.
 
-## Important operating note
-
-This software can cause the connected SDR to transmit RF energy. The operator is responsible for selecting frequencies, power levels, identification methods and operating conditions that comply with the applicable amateur radio licence, national regulations and relevant band plan.
-
-The example frequencies in this project are configuration examples and are not a recommendation to operate a beacon on a particular frequency.
-
-## Project structure
-
-```text
-qrssbeaconplutosdr/
-    qrss_beacon.py
-    requirements.txt
-    README.md
-```
-
-## Current scope
-
-The current version implements amplitude keyed slow CW using the FPGA DDS.
-
-Possible future additions include FSKCW, configurable Morse spacing, saved profiles, frequency calibration assistance, persistent configuration and waterfall oriented beacon modes.
-
-## Author
+# Author
 
 **SV1EEX**
 
