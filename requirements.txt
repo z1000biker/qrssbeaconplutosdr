@@ -1,0 +1,2 @@
+pyadi-iio>=0.0.21
+pylibiio>=0.25
